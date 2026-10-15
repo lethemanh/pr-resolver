@@ -34,7 +34,7 @@ class GitHub:
                 break
             page += 1
 
-    def fetch(self, number):
+    def fetch(self, number, include_resolved=False):
         r = self.repo
         prefix = f'repos/{r.owner}/{r.name}'
         report(f'[fetch] Reading PR #{number} metadata for {r.owner}/{r.name}...')
@@ -48,50 +48,82 @@ class GitHub:
         for row in self.pages(f'{prefix}/pulls/{number}/reviews'):
             if row.get('state') != 'PENDING':
                 entries.append({'id': f'review-{row["id"]}', 'kind': 'review', 'data': row})
-        report('[fetch] Reading inline threads and replies...')
+        report('[fetch] Reading thread resolution status...')
         cursor = None
-        thread_page = 0
+        resolved_review_ids = set()
+        active_review_ids = set()
+        excluded_ids = set()
         while True:
-            query = '''query($owner:String!,$name:String!,$number:Int!,$after:String,$cursor:String){
+            # GitHub cannot filter reviewThreads by resolution server-side.
+            # Read only status and parent review IDs, then load selected bodies.
+            query = '''query($owner:String!,$name:String!,$number:Int!,$after:String){
 repository(owner:$owner,name:$name){pullRequest(number:$number){
-reviewThreads(first:100,after:$after){nodes{FIELDS} pageInfo{hasNextPage endCursor}}}}}'''.replace('FIELDS', THREAD_FIELDS)
+reviewThreads(first:100,after:$after){nodes{id isResolved
+comments(first:1){nodes{pullRequestReview{databaseId}}}}
+pageInfo{hasNextPage endCursor}}}}}'''
             fields = dict(query=query, owner=r.owner, name=r.name, number=number)
             if cursor:
                 fields['after'] = cursor
             connection = self.api('graphql', fields)['data']['repository']['pullRequest']['reviewThreads']
-            thread_page += 1
-            report(f"[fetch] Inline threads: page {thread_page}, {len(connection['nodes'])} threads")
-            for thread in connection['nodes']:
+            for summary in connection['nodes']:
+                review_ids = {c['pullRequestReview']['databaseId']
+                              for c in summary['comments']['nodes'] if c.get('pullRequestReview')}
+                if summary['isResolved'] and not include_resolved:
+                    resolved_review_ids.update(review_ids)
+                    excluded_ids.add(f'thread-{summary["id"]}')
+                    continue
+                query2 = '''query($id:ID!,$cursor:String){node(id:$id){... on PullRequestReviewThread{FIELDS}}}'''.replace('FIELDS', THREAD_FIELDS)
+                thread = self.api('graphql', dict(query=query2, id=summary['id']))['data']['node']
+                # A thread can become resolved between the status and detail calls.
+                if thread['isResolved'] and not include_resolved:
+                    resolved_review_ids.update(review_ids)
+                    excluded_ids.add(f'thread-{summary["id"]}')
+                    continue
+                active_review_ids.update(review_ids)
                 comments = thread['comments']
                 nodes = list(comments['nodes'])
                 while comments['pageInfo']['hasNextPage']:
-                    query2 = '''query($id:ID!,$cursor:String){node(id:$id){... on PullRequestReviewThread{FIELDS}}}'''.replace('FIELDS', THREAD_FIELDS)
                     comments = self.api('graphql', dict(query=query2, id=thread['id'], cursor=comments['pageInfo']['endCursor']))['data']['node']['comments']
                     nodes.extend(comments['nodes'])
                     report(f"[fetch] Thread {thread['id']}: {len(nodes)} comments read...")
                 thread['comments'] = list({c['id']: c for c in nodes}.values())
                 entries.append({'id': f'thread-{thread["id"]}', 'kind': 'thread', 'data': thread})
+            report(f"[fetch] Thread page: {len(connection['nodes'])} statuses scanned")
             if not connection['pageInfo']['hasNextPage']:
                 break
             cursor = connection['pageInfo']['endCursor']
-        # Independent REST inventory guards against silently missing a thread/reply
-        # from GraphQL. Abort before replacing the previous complete document.
-        report('[fetch] Verifying inline comment completeness against REST...')
-        self.verify_inline_comments(number, entries)
+        if not include_resolved:
+            # Reviews have no resolution flag. Drop parents whose threads are all
+            # resolved, but retain standalone review bodies and active parents.
+            excluded_ids.update(e['id'] for e in entries if e['kind'] == 'review'
+                                and e['data']['id'] in resolved_review_ids - active_review_ids)
+            entries = [e for e in entries if not (e['kind'] == 'review'
+                       and e['data']['id'] in resolved_review_ids - active_review_ids)]
+        metadata['excluded_entry_ids'] = sorted(excluded_ids)
+        report('[fetch] Verifying selected inline comments against REST...')
+        self.verify_inline_comments(number, entries, selected_only=not include_resolved)
         entries = classify(list({e['id']: e for e in entries}.values()))
         fetch_summary(entries)
         return metadata, entries
 
-    def verify_inline_comments(self, number, entries):
+    def verify_inline_comments(self, number, entries, selected_only=False):
         endpoint = f'repos/{self.repo.owner}/{self.repo.name}/pulls/{number}/comments'
-        rest = {row['id']: row for row in self.pages(endpoint)}
         fetched = {comment['databaseId']: comment
                    for entry in entries if entry['kind'] == 'thread'
                    for comment in entry['data']['comments']}
-        missing = rest.keys() - fetched.keys()
+        if selected_only:
+            # Avoid downloading resolved comment bodies through the REST inventory.
+            rest = {key: self.api(f'repos/{self.repo.owner}/{self.repo.name}/pulls/comments/{key}')
+                    for key in fetched}
+            if any(row['id'] != key for key, row in rest.items()):
+                raise ValueError('GitHub returned an inconsistent inline comment ID. Retry fetch.')
+        else:
+            rest = {row['id']: row for row in self.pages(endpoint)}
+        missing = (fetched.keys() - rest.keys()) if selected_only else (rest.keys() - fetched.keys())
         if missing:
-            raise ValueError(f'Incomplete inline feedback: GitHub comment IDs missing from threads: {sorted(missing)}. Retry fetch.')
-        for key, row in rest.items():
+            raise ValueError(f'Incomplete inline feedback: GitHub comment IDs missing from selected inventory: {sorted(missing)}. Retry fetch.')
+        for key in (fetched.keys() & rest.keys()):
+            row = rest[key]
             comment = fetched[key]
             if (comment['body'] != row['body'] or
                     (comment.get('pullRequestReview') or {}).get('databaseId') != row['pull_request_review_id']):

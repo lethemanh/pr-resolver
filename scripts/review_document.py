@@ -181,7 +181,10 @@ def refresh(path, meta, fetched):
                 result += '\nReassessment required: feedback or PR head changed.\n'
         rows.append((source, result))
     # Preserve results for deleted feedback, with explicit retired source state.
+    excluded_ids = set(meta.get('excluded_entry_ids', []))
     for source, result in old.values():
+        if source['id'] in excluded_ids:
+            continue
         rows.append(({**source, 'retired': True}, result))
     text = render_document(meta, rows)
     parse(text)

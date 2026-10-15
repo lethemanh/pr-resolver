@@ -41,7 +41,8 @@ def main(argv=None):
                         help='Explicitly pass an environment variable to the agent (repeatable; may expose secrets)')
     parser.add_argument('--output', help='Document path; relative paths are relative to PR-resolver')
     parser.add_argument('--agent-command', help='Quoted executable and arguments; prompt is sent on stdin (no shell)')
-    parser.add_argument('--include-resolved', action='store_true')
+    parser.add_argument('--include-resolved', action='store_true',
+                        help='Also fetch resolved threads and assess their pending results')
     args = parser.parse_args(argv)
     try:
         if args.pr <= 0:
@@ -54,7 +55,7 @@ def main(argv=None):
         if args.command in ('fetch', 'run') and not args.output:
             output.parent.mkdir(parents=True, exist_ok=True)
         if args.command in ('fetch', 'run'):
-            metadata, entries = GitHub(repo).fetch(args.pr)
+            metadata, entries = GitHub(repo).fetch(args.pr, include_resolved=args.include_resolved)
             refresh(output, metadata, entries)
             report(f'[document] Saved {len(entries)} feedback entries: {output}')
             outcome_summary(parse(output.read_text())[1], label='document')

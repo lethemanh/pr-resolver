@@ -71,8 +71,11 @@ python3 resolver.py fetch --repo /path/to/my-app --pr 123
 ```
 
 Open `reviews/my-app/RESOLVE_REVIEW.md` inside this PR Resolver project. It contains
-general comments, submitted reviews, and inline conversations with their replies,
-file locations, and diff context.
+general comments, relevant submitted reviews, and unresolved inline conversations
+with their replies, file locations, and diff context. Resolved thread bodies are
+skipped by default; reviews whose threads are all resolved are omitted. General
+comments and standalone review bodies have no GitHub resolution flag and remain
+included. Add `--include-resolved` to fetch resolved conversations too.
 
 ### 2. Inspect the document and checkout
 
@@ -150,15 +153,20 @@ local assessment, not confirmation that a hosted quality gate passed.
 Only eligible `pending` entries are selected. Completed entries stay completed
 unless their feedback or the PR head changes during a fetch.
 
-- Resolved GitHub threads remain visible but are excluded by default. Add
-  `--include-resolved` to assess pending resolved threads.
+- Resolved GitHub threads are omitted from default fetches and removed from the
+  document on refresh, along with review parents whose threads are all resolved.
+  Add `--include-resolved` to fetch them and assess their pending results.
 - Feedback that disappears on refresh is retained as retired history and excluded.
 - Recognized CodeRabbit walkthroughs, rate-limit notices, and summaries that repeat
   linked inline findings are kept as context. Additional findings and unrecognized
   messages remain eligible.
 
 Fetching preserves existing results, resets changed entries to `pending`, and
-verifies inline feedback against a separate REST inventory. A failed fetch leaves
+verifies selected inline comment bodies and review associations against REST.
+Default fetches verify each selected comment individually; `--include-resolved`
+uses the full REST inventory. GitHub requires scanning thread statuses to identify
+unresolved conversations, but resolved thread bodies and replies are skipped by
+default. A failed fetch leaves
 the previous complete document intact. Use only one resolver or editor per
 document at a time; concurrent edits are not merged.
 
