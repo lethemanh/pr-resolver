@@ -12,21 +12,23 @@ from .progress import report, outcome_summary
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def default_output(repo):
-    return PROJECT_ROOT / 'reviews' / repo.path.name / 'RESOLVE_REVIEW.md'
-
-
-def migrate_legacy_folder(repo, number):
-    legacy = PROJECT_ROOT / 'reviews' / repo.host / repo.owner / repo.name
-    destination = default_output(repo).parent
-    if destination.exists() or not (legacy / 'RESOLVE_REVIEW.md').exists():
-        return
-    metadata, _ = parse((legacy / 'RESOLVE_REVIEW.md').read_text())
-    if identity(metadata) != (repo.host, f'{repo.owner}/{repo.name}', number):
-        return
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    legacy.rename(destination)
-    report(f'[document] Moved existing review folder to {destination}')
+def default_output(repo, number):
+    root = PROJECT_ROOT / 'reviews'
+    output = root / repo.path.name / f'pr-{number}' / 'RESOLVE_REVIEW.md'
+    if output.exists():
+        return output
+    # Reuse matching documents in earlier layouts, together with their run logs.
+    for legacy in (root / repo.path.name / 'RESOLVE_REVIEW.md',
+                   root / repo.host / repo.owner / repo.name / 'RESOLVE_REVIEW.md'):
+        if not legacy.exists():
+            continue
+        try:
+            metadata, _ = parse(legacy.read_text())
+        except ValueError:
+            continue
+        if identity(metadata) == (repo.host, f'{repo.owner}/{repo.name}', number):
+            return legacy
+    return output
 
 
 def main(argv=None):
@@ -49,9 +51,7 @@ def main(argv=None):
             raise ValueError('PR number must be positive')
         report('[repository] Validating checkout and GitHub remote...')
         repo = Repository.discover(args.repo, args.remote, args.trusted_host)
-        if not args.output:
-            migrate_legacy_folder(repo, args.pr)
-        output = (PROJECT_ROOT / Path(args.output).expanduser()).resolve() if args.output else default_output(repo)
+        output = (PROJECT_ROOT / Path(args.output).expanduser()).resolve() if args.output else default_output(repo, args.pr)
         if args.command in ('fetch', 'run') and not args.output:
             output.parent.mkdir(parents=True, exist_ok=True)
         if args.command in ('fetch', 'run'):
@@ -68,6 +68,8 @@ def main(argv=None):
             live = GitHub(repo).api(f'repos/{repo.owner}/{repo.name}/pulls/{args.pr}')
             if live['head']['sha'] != metadata['sha']:
                 raise ValueError('PR head changed; fetch again before resolving')
+            report(f"[repository] Preparing PR branch {metadata['head']}...")
+            repo.checkout_pr(args.pr, metadata['head'], metadata['sha'])
             snapshot = repo.snapshot(metadata['sha'])
             return run(repo, output, metadata, snapshot, args.agent_command, args.include_resolved, args.agent_env)
         return 0

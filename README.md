@@ -70,7 +70,7 @@ with your own.
 python3 resolver.py fetch --repo /path/to/my-app --pr 123
 ```
 
-Open `reviews/my-app/RESOLVE_REVIEW.md` inside this PR Resolver project. It contains
+Open `reviews/my-app/pr-123/RESOLVE_REVIEW.md` inside this PR Resolver project. It contains
 general comments, relevant submitted reviews, and unresolved inline conversations
 with their replies, file locations, and diff context. Resolved thread bodies are
 skipped by default; reviews whose threads are all resolved are omitted. General
@@ -80,8 +80,10 @@ included. Add `--include-resolved` to fetch resolved conversations too.
 ### 2. Inspect the document and checkout
 
 Read the feedback and check your existing local changes. Before starting the
-agent, the checkout HEAD must exactly match the fetched PR head commit. Switch
-the checkout yourself if needed; PR Resolver does not switch branches.
+agent, the checkout HEAD must exactly match the fetched PR head commit. PR Resolver automatically checks out the PR branch before resolving, including
+fork PRs. If the checkout has staged, unstaged, or untracked changes, it stops
+and asks you to commit, stash, or remove them first. Branch updates are never
+forced; divergent local branches must be reconciled before retrying.
 
 Dirty changes are allowed and recorded. The agent is instructed to preserve them,
 but you should review them and keep any backups you need.
@@ -156,6 +158,8 @@ unless their feedback or the PR head changes during a fetch.
 - Resolved GitHub threads are omitted from default fetches and removed from the
   document on refresh, along with review parents whose threads are all resolved.
   Add `--include-resolved` to fetch them and assess their pending results.
+- Outdated inline threads are retained as context and never selected, even with
+  `--include-resolved`. Existing results are preserved as history.
 - Feedback that disappears on refresh is retained as retired history and excluded.
 - Recognized CodeRabbit walkthroughs, rate-limit notices, and summaries that repeat
   linked inline findings are kept as context. Additional findings and unrecognized
@@ -177,22 +181,25 @@ The default layout is relative to the PR Resolver installation/project:
 ```text
 reviews/
   my-app/
-    RESOLVE_REVIEW.md
-    runs/
-      <run-id>/
-        before.md
-        checkout.json
-        prompt.md
-        agent.log
-        exit.json
+    pr-123/
+      RESOLVE_REVIEW.md
+      runs/
+        <run-id>/
+          before.md
+          checkout.json
+          prompt.md
+          agent.log
+          exit.json
 ```
 
 The folder name comes from the checkout directory, not the GitHub repository name.
 Documents and new logs are saved outside the target checkout. `reviews/` is ignored
 by this project's Git configuration.
 
-For multiple PRs in one checkout, or checkouts with the same directory name,
-choose a separate document with `--output`. Use the same path for subsequent
+Each PR gets its own `pr-<number>` folder, so multiple PRs in one checkout do
+not overwrite each other. Matching documents from earlier layouts are reused in
+place, preserving their results and logs. For checkouts with the same directory
+name, choose a separate document with `--output`. Use the same path for subsequent
 `fetch` and `resolve` commands:
 
 ```sh

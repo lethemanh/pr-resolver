@@ -228,6 +228,7 @@ def render_document(meta, rows):
 def pending(entries, include_resolved=False):
     return [key for key, (source, result) in entries.items()
             if status(result) == 'pending' and not source.get('retired') and not source.get('context_only')
+            and not source['data'].get('isOutdated', False)
             and (include_resolved or not source['data'].get('isResolved', False))]
 
 

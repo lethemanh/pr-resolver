@@ -1,4 +1,4 @@
-"""Local checkout discovery. Never mutates Git state."""
+"""Local checkout discovery and guarded PR branch checkout."""
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -50,10 +50,28 @@ class Repository:
         repository.validate_host()
         return repository
 
+    def checkout_pr(self, number, branch, sha):
+        changes = git(self.path, 'status', '--porcelain=v1', '--untracked-files=all')
+        if changes:
+            raise ValueError('Checkout has local changes (including untracked files); '
+                             'commit, stash, or remove them before resolving.\n' + changes)
+        current = git(self.path, 'branch', '--show-current')
+        head = git(self.path, 'rev-parse', 'HEAD')
+        if current == branch and head == sha:
+            return
+        self.validate_host()
+        # gh handles fork PRs and existing local branches without forcing updates.
+        subprocess.check_call(['gh', 'pr', 'checkout', str(number), '--repo',
+                        f'{self.host}/{self.owner}/{self.name}'],
+                       cwd=self.path)
+        if git(self.path, 'branch', '--show-current') != branch:
+            raise ValueError(f'PR checkout did not select expected branch {branch}; '
+                             'inspect the checkout before retrying')
+
     def snapshot(self, sha):
         head = git(self.path, 'rev-parse', 'HEAD')
         if head != sha:
-            raise ValueError(f'Checkout HEAD {head} does not match PR head {sha}; check out the PR yourself')
+            raise ValueError(f'Checkout HEAD {head} does not match PR head {sha}; fetch again and retry resolving')
         return {'head': head, 'branch': git(self.path, 'branch', '--show-current'),
                 'status': git(self.path, 'status', '--porcelain=v1'),
                 'diff': git(self.path, 'diff', 'HEAD', '--binary')}

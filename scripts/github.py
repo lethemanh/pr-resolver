@@ -131,8 +131,10 @@ pageInfo{hasNextPage endCursor}}}}}'''
 
 
 def context_reason(source, inline_review_ids=()):
-    """Conservative known-bot notices only; never infer human intent from keywords."""
+    """Explicit thread state and conservative known-bot notices only."""
     data = source['data']
+    if source['kind'] == 'thread' and data.get('isOutdated'):
+        return 'Outdated GitHub thread; skipped because it refers to an earlier diff.'
     author = (data.get('user') or {}).get('login', '').removesuffix('[bot]')
     body = data.get('body', '')
     if author != 'coderabbitai':
